@@ -1,0 +1,217 @@
+
+
+## LoRa-to-SMS-Gateway
+
+This repository contains the code and instructions for building a LoRa-to-SMS gateway. This project allows you to send an SMS message from a LoRa T-Pager to any GSM mobile phone.
+
+### `README.md`
+
+```markdown
+# LoRa-to-SMS Gateway
+
+This project enables you to send SMS messages from a LoRa-based device (like the LILYGO T-Pager) to a standard GSM mobile phone. Since LoRa and GSM are fundamentally different communication technologies, a gateway device is required to translate the LoRa message and forward it to the cellular network.
+
+## Concept
+
+The workflow is straightforward:
+
+1.  **T-Pager (Sender)**: Your T-Pager sends a LoRa message containing the destination phone number and the text.
+2.  **Gateway (Receiver & Forwarder)**: A second, internet-connected device receives the LoRa message.
+3.  **Forward to GSM**: This gateway uses a GSM module (with its own SIM card) to send the message as a standard SMS to the recipient's phone.
+
+## Why a Gateway is Essential
+
+A LoRa T-Pager and a standard cell phone operate on entirely different networks.
+
+*   **LoRa**: A Low-Power, Long-Range Wide Area Network (LPWAN) protocol. It's designed for sending small packets of data over long distances, not for direct connection to the cellular network.
+*   **GSM**: The global standard for mobile communications. It's what your phone uses to make calls and send SMS messages.
+
+A gateway acts as a "translator" between these two technologies. It receives the LoRa message and then re-transmits it as a standard SMS over the GSM network.
+
+## Building Your LoRa-to-SMS Gateway
+
+Here’s what you'll need for your gateway:
+
+**Hardware Components:**
+
+1.  **ESP32 Development Board**: A second LoRa-capable board, such as another LILYGO T-LoRa, will serve as the gateway's brain.
+2.  **GSM Module**: A SIM800L or SIM900A module is a common and affordable choice.
+3.  **SIM Card**: A standard 2G SIM card with an active plan for sending SMS messages.
+4.  **Power Supply**: A stable power source for the ESP32 and GSM module.
+
+**Wiring the Gateway:**
+
+Connect the GSM module to your gateway's ESP32 board as follows:
+
+| SIM800L Pin | ESP32 Pin   |
+| :---------- | :---------- |
+| **VCC**     | **5V**      |
+| **GND**     | **GND**     |
+| **TXD**     | **GPIO 26** |
+| **RXD**     | **GPIO 27** |
+
+## The Code
+
+You will need to program both your T-Pager (to send the specially formatted LoRa message) and the gateway (to receive and forward it). The code is located in the following directories:
+
+-   [`T_Pager_Sender/`](T_Pager_Sender/)
+-   [`Gateway/`](Gateway/)
+
+## How to Use
+
+1.  **Assemble and Program**: Upload the respective code to your T-Pager and your gateway device.
+2.  **Power Up**: Ensure both devices are powered on.
+3.  **Send the Message**:
+    *   Open the Serial Monitor for your T-Pager.
+    *   Type the phone number and message in the specified format (e.g., `+1234567890:This is a test from my LoRa pager!`).
+    *   The T-Pager will send this as a LoRa packet.
+4.  **Gateway in Action**:
+    *   The gateway will receive the packet.
+    *   It will then command the SIM800L module to send the extracted message to the specified phone number.
+
+This setup provides a functional and fascinating bridge between the worlds of IoT and traditional telecommunications.
+```
+
+---
+
+### `T_Pager_Sender/T_Pager_Sender.ino`
+
+```cpp
+#include <SPI.h>
+#include <LoRa.h>
+
+// LoRa Pin Definitions for T-Pager
+#define LORA_SCK 5
+#define LORA_MISO 19
+#define LORA_MOSI 27
+#define LORA_SS 18
+#define LORA_RST 14
+#define LORA_DIO0 26
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  Serial.println("LoRa Sender");
+
+  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
+
+  if (!LoRa.begin(915E6)) { // Use 868E6 for Europe, 433E6 for Asia
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+}
+
+void loop() {
+  Serial.println("Enter phone number and message in the format: +1234567890:Hello World");
+
+  while (!Serial.available());
+
+  String input = Serial.readString();
+  input.trim();
+
+  Serial.print("Sending packet: ");
+  Serial.println(input);
+
+  // Send LoRa packet
+  LoRa.beginPacket();
+  LoRa.print(input);
+  LoRa.endPacket();
+
+  delay(5000);
+}
+```
+
+---
+
+### `Gateway/Gateway.ino`
+
+```cpp
+#include <LoRa.h>
+#include <HardwareSerial.h>
+
+// LoRa Pin Definitions for Gateway ESP32
+#define LORA_SCK 5
+#define LORA_MISO 19
+#define LORA_MOSI 27
+#define LORA_SS 18
+#define LORA_RST 14
+#define LORA_DIO0 26
+
+// GSM Module UART pins
+#define RXD2 27
+#define TXD2 26
+
+HardwareSerial sim800l(1);
+
+void setup() {
+  Serial.begin(115200);
+  sim800l.begin(9600, SERIAL_8N1, RXD2, TXD2);
+
+  while (!Serial);
+  Serial.println("LoRa-to-SMS Gateway");
+
+  // Initialize LoRa
+  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
+  if (!LoRa.begin(915E6)) { // Match the frequency of the sender
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+
+  // Initialize GSM Module
+  initGSM();
+}
+
+void loop() {
+  int packetSize = LoRa.parsePacket();
+  if (packetSize) {
+    String received = "";
+    while (LoRa.available()) {
+      received += (char)LoRa.read();
+    }
+    Serial.print("Received LoRa packet: '");
+    Serial.print(received);
+    Serial.println("'");
+
+    // Parse the received message
+    int colonIndex = received.indexOf(':');
+    if (colonIndex > 0) {
+      String phoneNumber = received.substring(0, colonIndex);
+      String message = received.substring(colonIndex + 1);
+
+      sendSMS(phoneNumber, message);
+    } else {
+      Serial.println("Invalid message format.");
+    }
+  }
+}
+
+void initGSM() {
+  Serial.println("Initializing GSM module...");
+  sim800l.println("AT"); // Check connection
+  delay(1000);
+  sim800l.println("AT+CMGF=1"); // Set SMS to text mode
+  delay(1000);
+  Serial.println("GSM module initialized.");
+}
+
+void sendSMS(String number, String text) {
+  Serial.print("Sending SMS to: ");
+  Serial.println(number);
+  Serial.print("Message: ");
+  Serial.println(text);
+
+  sim800l.print("AT+CMGS=\"");
+  sim800l.print(number);
+  sim800l.println("\"");
+
+  delay(1000);
+
+  sim800l.print(text);
+  delay(100);
+  sim800l.write(26); // Ctrl+Z to send
+
+  delay(5000);
+  Serial.println("SMS sent command issued.");
+}
+```
